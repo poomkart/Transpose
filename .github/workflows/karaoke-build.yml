@@ -1,0 +1,60 @@
+name: Karaoke Mode Build
+
+on:
+  push:
+    branches:
+      - feature/karaoke-mode
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: feature/karaoke-mode
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle executable
+        run: chmod +x gradlew
+
+      - name: Apply Karaoke Mode patch
+        run: python3 tools/apply_karaoke_patch.py .
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Commit generated integration changes
+        run: |
+          if git diff --quiet; then
+            echo "No generated integration changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add feature/main/src/main/java/com/example/main/MainViewModel.kt
+          git add feature/main/src/main/java/com/example/main/components/bottomsheet/PlayerBottomSheet.kt
+          git commit -m "feat: integrate Karaoke Mode V1"
+          git push origin HEAD:feature/karaoke-mode
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: transpose-karaoke-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
