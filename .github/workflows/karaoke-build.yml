@@ -35,11 +35,23 @@ jobs:
       - name: Apply Karaoke Mode patch
         run: python3 tools/apply_karaoke_patch.py .
 
+      - name: Disable private Firebase build plugins for fork debug build
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/build.gradle.kts')
+          s = p.read_text()
+          s = s.replace('    alias(libs.plugins.google.services)\n', '')
+          s = s.replace('    alias(libs.plugins.firebase.crashlytics)\n', '')
+          p.write_text(s)
+          PY
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Commit generated integration changes
         run: |
+          git checkout -- app/build.gradle.kts
           if git diff --quiet; then
             echo "No generated integration changes to commit"
             exit 0
