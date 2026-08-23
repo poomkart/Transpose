@@ -25,6 +25,8 @@ internal sealed interface KaraokeLyricsResult {
 
 internal object KaraokeLyricsRepository {
     suspend fun get(item: PlayableItem): KaraokeLyricsResult = withContext(Dispatchers.IO) {
+        val descriptionFallback = extractLyricsFromDescription(item)
+
         runCatching {
             val rawTitle = stripYouTubeNoise(item.title)
             val uploaderArtist = when (item) {
@@ -65,15 +67,15 @@ internal object KaraokeLyricsRepository {
                     merged.putIfAbsent(id, candidate)
                 }
 
-                // Prefer the early, precise searches. Stop once we have enough choices.
                 if (merged.size >= 8) break
                 if (index < urls.lastIndex) delay(250)
             }
 
             if (merged.isEmpty()) {
-                return@runCatching KaraokeLyricsResult.Error(
-                    "ไม่พบเนื้อเพลงใน LRCLIB\nค้นหา: $coreTitle"
-                )
+                return@runCatching descriptionFallback?.let { KaraokeLyricsResult.Plain(it) }
+                    ?: KaraokeLyricsResult.Error(
+                        "ไม่พบเนื้อเพลงใน LRCLIB หรือคำอธิบาย YouTube\nค้นหา: $coreTitle"
+                    )
             }
 
             val best = chooseBest(
@@ -91,15 +93,20 @@ internal object KaraokeLyricsRepository {
             when {
                 synced != null -> {
                     val parsed = LrcParser.parse(synced)
-                    if (parsed.isNotEmpty()) KaraokeLyricsResult.Synced(parsed)
-                    else if (plain != null) KaraokeLyricsResult.Plain(plain)
-                    else KaraokeLyricsResult.Error("เนื้อเพลงนี้ไม่มีเวลา sync")
+                    when {
+                        parsed.isNotEmpty() -> KaraokeLyricsResult.Synced(parsed)
+                        plain != null -> KaraokeLyricsResult.Plain(plain)
+                        descriptionFallback != null -> KaraokeLyricsResult.Plain(descriptionFallback)
+                        else -> KaraokeLyricsResult.Error("เนื้อเพลงนี้ไม่มีเวลา sync")
+                    }
                 }
                 plain != null -> KaraokeLyricsResult.Plain(plain)
+                descriptionFallback != null -> KaraokeLyricsResult.Plain(descriptionFallback)
                 else -> KaraokeLyricsResult.Error("ไม่พบเนื้อเพลง")
             }
         }.getOrElse {
-            KaraokeLyricsResult.Error("โหลดเนื้อเพลงไม่สำเร็จ")
+            descriptionFallback?.let { KaraokeLyricsResult.Plain(it) }
+                ?: KaraokeLyricsResult.Error("โหลดเนื้อเพลงไม่สำเร็จ")
         }
     }
 
@@ -121,12 +128,10 @@ internal object KaraokeLyricsRepository {
             }
         }
 
-        // Relax artist matching because YouTube uploader names often differ from LRCLIB artists.
         titles.take(2).forEach { title ->
             urls += structuredSearch(title, null)
         }
 
-        // LRCLIB's q search matches keywords across title, artist and album fields.
         if (primaryTitle.isNotBlank() && primaryArtist.isNotBlank()) {
             urls += keywordSearch("$primaryArtist $primaryTitle")
         }
@@ -150,23 +155,37 @@ internal object KaraokeLyricsRepository {
         "https://lrclib.net/api/search?q=${Uri.encode(query)}"
 
     private fun httpGet(url: String): String {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 8_000
-            readTimeout = 8_000
-            setRequestProperty(
-                "User-Agent",
-                "Transpose-Karaoke/1.0 (https://github.com/poomkart/Transpose)"
-            )
-            setRequestProperty("Accept", "application/json")
-        }
-        return try {
-            if (connection.responseCode !in 200..299) {
-                error("LRCLIB HTTP ${connection.responseCode}")
+        var attempt = 0
+        while (true) {
+            val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8_000
+                readTimeout = 8_000
+                setRequestProperty(
+                    "User-Agent",
+                    "Transpose-Karaoke/1.0 (https://github.com/poomkart/Transpose)"
+                )
+                setRequestProperty("Accept", "application/json")
             }
-            connection.inputStream.bufferedReader().use { it.readText() }
-        } finally {
-            connection.disconnect()
+
+            try {
+                val responseCode = connection.responseCode
+                if (responseCode == 429 && attempt == 0) {
+                    val retrySeconds = connection.getHeaderField("Retry-After")
+                        ?.toLongOrNull()
+                        ?.coerceIn(1L, 3L)
+                        ?: 1L
+                    attempt += 1
+                    Thread.sleep(retrySeconds * 1_000L)
+                    continue
+                }
+                if (responseCode !in 200..299) {
+                    error("LRCLIB HTTP $responseCode")
+                }
+                return connection.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                connection.disconnect()
+            }
         }
     }
 
@@ -212,6 +231,57 @@ internal object KaraokeLyricsRepository {
 
             (titlePenalty * 3) + artistPenalty + durationPenalty + lyricsPenalty
         } ?: results.first()
+    }
+
+    private fun extractLyricsFromDescription(item: PlayableItem): String? {
+        val description = (item as? PlayableItem.Remote)
+            ?.video
+            ?.description
+            .orEmpty()
+
+        if (description.isBlank()) return null
+
+        val lines = description.lines()
+        val markerRegex = Regex("(?i)^(lyrics?|เนื้อเพลง)\\s*[:：]?\\s*$")
+        val markerIndex = lines.indexOfFirst { markerRegex.matches(it.trim()) }
+        if (markerIndex < 0) return null
+
+        val collected = mutableListOf<String>()
+        for (rawLine in lines.drop(markerIndex + 1)) {
+            val line = rawLine.trim()
+
+            if (collected.isNotEmpty() && isDescriptionStopLine(line)) {
+                break
+            }
+
+            if (line.isBlank()) {
+                if (collected.isNotEmpty() && collected.last().isNotBlank()) {
+                    collected += ""
+                }
+                continue
+            }
+
+            collected += line
+        }
+
+        val text = collected
+            .dropLastWhile { it.isBlank() }
+            .joinToString("\n")
+            .trim()
+
+        val nonBlankLineCount = text.lineSequence().count { it.isNotBlank() }
+        return text.takeIf { nonBlankLineCount >= 4 }
+    }
+
+    private fun isDescriptionStopLine(line: String): Boolean {
+        if (line.isBlank()) return false
+        if (line.matches(Regex("^[-=_]{4,}.*$"))) return true
+        if (line.startsWith("#")) return true
+
+        return Regex(
+            "(?i)^(follow|ติดตาม|contact|ติดต่องาน|digital\\s+released|stream|listen|available|" +
+                "credits?|facebook|instagram|tiktok|youtube|x\\s*:|www\\.|https?://).*$"
+        ).matches(line)
     }
 
     private fun textDistancePenalty(wanted: String, actual: String): Int {

@@ -18,6 +18,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -38,8 +40,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.model.playable.PlayableItem
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 @Composable
 internal fun KaraokeOverlay(
@@ -61,10 +65,70 @@ internal fun KaraokeOverlay(
     var offsetMs by remember(item.id) { mutableLongStateOf(0L) }
     val positionProvider by rememberUpdatedState(mediaPositionProvider)
 
+    val context = LocalContext.current
+    val audioEffectsManager = remember(context) {
+        karaokeAudioEffectsManager(context)
+    }
+    val liveVocalRemovalEnabled by audioEffectsManager.isVocalRemovalEnabled.collectAsStateWithLifecycle()
+    val vocalRemovalMix by audioEffectsManager.vocalRemovalMix.collectAsStateWithLifecycle()
+    val vocalOnlyMode by audioEffectsManager.isVocalOnlyMode.collectAsStateWithLifecycle()
+
+    fun setRemovalEnabled(enabled: Boolean) {
+        if (audioEffectsManager.isVocalRemovalEnabled.value != enabled) {
+            audioEffectsManager.updateIsVocalRemovalEnabled()
+        }
+    }
+
+    fun setVocalOnly(enabled: Boolean) {
+        if (audioEffectsManager.isVocalOnlyMode.value != enabled) {
+            audioEffectsManager.updateIsVocalOnlyMode()
+        }
+    }
+
+    fun setNormalVocalPercent(percent: Float) {
+        val safePercent = percent.coerceIn(0f, 100f)
+        setVocalOnly(false)
+
+        if (safePercent >= 99.5f) {
+            audioEffectsManager.updateVocalRemovalMix(0f)
+            setRemovalEnabled(false)
+        } else {
+            setRemovalEnabled(true)
+            audioEffectsManager.updateVocalRemovalMix(1f - (safePercent / 100f))
+        }
+    }
+
+    fun setVocalOnlyPreset() {
+        setRemovalEnabled(true)
+        setVocalOnly(true)
+        audioEffectsManager.updateVocalRemovalMix(1f)
+    }
+
+    val vocalPercent = when {
+        vocalOnlyMode -> 100
+        !liveVocalRemovalEnabled -> 100
+        else -> ((1f - vocalRemovalMix.coerceIn(0f, 1f)) * 100f).roundToInt()
+    }
+
+    val vocalStatus = when {
+        !isVocalRemovalSupported -> "Vocal removal unavailable"
+        vocalOnlyMode -> "Vocal Only"
+        !liveVocalRemovalEnabled -> "Original"
+        vocalPercent <= 5 -> "Instrumental"
+        else -> "Guide vocal $vocalPercent%"
+    }
+
     LaunchedEffect(item.id) {
-        onEnsureVocalRemovalEnabled()
+        if (isVocalRemovalSupported) {
+            if (!isVocalRemovalEnabled) {
+                onEnsureVocalRemovalEnabled()
+            }
+            setVocalOnly(false)
+            audioEffectsManager.updateVocalRemovalMix(1f)
+        }
         lyrics = KaraokeLyricsRepository.get(item)
     }
+
     LaunchedEffect(Unit) {
         while (true) {
             positionMs = positionProvider().coerceAtLeast(0L)
@@ -101,9 +165,8 @@ internal fun KaraokeOverlay(
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Text(
-                            if (!isVocalRemovalSupported) "Vocal removal unavailable"
-                            else if (isVocalRemovalEnabled) "Vocal removal ON" else "Vocal removal OFF",
-                            color = if (isVocalRemovalEnabled) Color(0xFF75E6A4) else Color.White.copy(alpha = .58f),
+                            vocalStatus,
+                            color = if (liveVocalRemovalEnabled) Color(0xFF75E6A4) else Color.White.copy(alpha = .58f),
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -112,7 +175,7 @@ internal fun KaraokeOverlay(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(top = 76.dp, bottom = 132.dp),
+                        .padding(top = 76.dp, bottom = 286.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     when (val result = lyrics) {
@@ -151,9 +214,17 @@ internal fun KaraokeOverlay(
                         isPlaying = isPlaying,
                         pitchUiValue = pitchUiValue,
                         offsetMs = offsetMs,
+                        vocalRemovalSupported = isVocalRemovalSupported,
+                        vocalOnlyMode = vocalOnlyMode,
+                        vocalPercent = vocalPercent,
                         onPlayPause = onPlayPause,
                         onPitchMinusOne = onPitchMinusOne,
                         onPitchPlusOne = onPitchPlusOne,
+                        onVocalPercentChange = ::setNormalVocalPercent,
+                        onOriginal = { setNormalVocalPercent(100f) },
+                        onGuide = { setNormalVocalPercent(30f) },
+                        onInstrumental = { setNormalVocalPercent(0f) },
+                        onVocalOnly = ::setVocalOnlyPreset,
                         onOffsetMinus = { offsetMs = (offsetMs - 500L).coerceAtLeast(-10_000L) },
                         onOffsetPlus = { offsetMs = (offsetMs + 500L).coerceAtMost(10_000L) },
                     )
@@ -200,18 +271,30 @@ private fun KaraokeControls(
     isPlaying: Boolean,
     pitchUiValue: Int,
     offsetMs: Long,
+    vocalRemovalSupported: Boolean,
+    vocalOnlyMode: Boolean,
+    vocalPercent: Int,
     onPlayPause: () -> Unit,
     onPitchMinusOne: () -> Unit,
     onPitchPlusOne: () -> Unit,
+    onVocalPercentChange: (Float) -> Unit,
+    onOriginal: () -> Unit,
+    onGuide: () -> Unit,
+    onInstrumental: () -> Unit,
+    onVocalOnly: () -> Unit,
     onOffsetMinus: () -> Unit,
     onOffsetPlus: () -> Unit,
 ) {
     val semitones = (pitchUiValue - 100) / 10f
+
     Column(
         Modifier.fillMaxWidth().background(Color.White.copy(alpha = .06f)).padding(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Button(onClick = onPitchMinusOne) { Text("Key −") }
             Text(
                 text = if (semitones == 0f) "Original" else "%+.0f".format(semitones),
@@ -221,12 +304,50 @@ private fun KaraokeControls(
             )
             Button(onClick = onPitchPlusOne) { Text("Key +") }
         }
+
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = if (vocalOnlyMode) "🎤 Vocal Only" else "🎤 เสียงร้อง $vocalPercent%",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+
+        Slider(
+            value = vocalPercent.toFloat(),
+            onValueChange = onVocalPercentChange,
+            valueRange = 0f..100f,
+            enabled = vocalRemovalSupported && !vocalOnlyMode,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(onClick = onOriginal, enabled = vocalRemovalSupported) { Text("Original") }
+            Button(onClick = onGuide, enabled = vocalRemovalSupported) { Text("Guide 30%") }
+        }
+
+        Spacer(Modifier.height(6.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(onClick = onInstrumental, enabled = vocalRemovalSupported) { Text("Instrumental") }
+            Button(onClick = onVocalOnly, enabled = vocalRemovalSupported) { Text("Vocal Only") }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Button(onClick = onOffsetMinus) { Text("Lyrics −0.5s") }
             Button(onClick = onPlayPause) { Text(if (isPlaying) "Pause" else "Play") }
             Button(onClick = onOffsetPlus) { Text("Lyrics +0.5s") }
         }
+
         Text(
             "Sync ${if (offsetMs >= 0) "+" else ""}${offsetMs / 1000.0}s",
             color = Color.White.copy(alpha = .55f),
