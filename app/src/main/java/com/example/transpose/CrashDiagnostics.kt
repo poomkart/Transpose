@@ -12,6 +12,7 @@ import java.util.Locale
 object CrashDiagnostics {
     private const val PREFS = "karaoke_crash_diagnostics"
     private const val KEY_LAST_CRASH = "last_crash"
+    private const val KEY_LAST_STAGE = "last_stage"
 
     @Volatile
     private var installed = false
@@ -36,6 +37,7 @@ object CrashDiagnostics {
                     appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
                     appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
                     appendLine("Thread: ${thread.name}")
+                    appendLine("Last stage: ${lastStage(context) ?: "unknown"}")
                     appendLine()
                     append(writer.toString())
                 }
@@ -55,6 +57,17 @@ object CrashDiagnostics {
             }
         }
     }
+
+    fun markStage(context: Context, stage: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_LAST_STAGE, stage)
+            .commit()
+    }
+
+    fun lastStage(context: Context): String? =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_LAST_STAGE, null)
 
     fun lastCrash(context: Context): String? =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
