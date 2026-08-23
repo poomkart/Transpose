@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -81,9 +80,9 @@ internal fun KaraokeOverlay(
         ),
     ) {
         Surface(modifier = modifier.fillMaxSize(), color = Color(0xFF080B12)) {
-            Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Box(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = onClose) {
@@ -93,7 +92,7 @@ internal fun KaraokeOverlay(
                             tint = Color.White,
                         )
                     }
-                    Column(Modifier.weight(1f)) {
+                    Column(Modifier.fillMaxWidth()) {
                         Text("KARAOKE", color = Color.White, fontWeight = FontWeight.Bold)
                         Text(
                             item.title,
@@ -101,18 +100,21 @@ internal fun KaraokeOverlay(
                             maxLines = 1,
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        Text(
+                            if (!isVocalRemovalSupported) "Vocal removal unavailable"
+                            else if (isVocalRemovalEnabled) "Vocal removal ON" else "Vocal removal OFF",
+                            color = if (isVocalRemovalEnabled) Color(0xFF75E6A4) else Color.White.copy(alpha = .58f),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
                     }
-                    Text(
-                        if (!isVocalRemovalSupported) "Vocal: N/A"
-                        else if (isVocalRemovalEnabled) "Vocal: OFF" else "Vocal: ON",
-                        color = if (isVocalRemovalEnabled) Color(0xFF75E6A4) else Color.White.copy(alpha = .58f),
-                        style = MaterialTheme.typography.labelMedium,
-                    )
                 }
 
-                Spacer(Modifier.height(8.dp))
-
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 76.dp, bottom = 132.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
                     when (val result = lyrics) {
                         KaraokeLyricsResult.Loading -> CircularProgressIndicator()
                         is KaraokeLyricsResult.Error -> Text(
@@ -142,16 +144,20 @@ internal fun KaraokeOverlay(
                     }
                 }
 
-                KaraokeControls(
-                    isPlaying = isPlaying,
-                    pitchUiValue = pitchUiValue,
-                    offsetMs = offsetMs,
-                    onPlayPause = onPlayPause,
-                    onPitchMinusOne = onPitchMinusOne,
-                    onPitchPlusOne = onPitchPlusOne,
-                    onOffsetMinus = { offsetMs = (offsetMs - 500L).coerceAtLeast(-10_000L) },
-                    onOffsetPlus = { offsetMs = (offsetMs + 500L).coerceAtMost(10_000L) },
-                )
+                Box(
+                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                ) {
+                    KaraokeControls(
+                        isPlaying = isPlaying,
+                        pitchUiValue = pitchUiValue,
+                        offsetMs = offsetMs,
+                        onPlayPause = onPlayPause,
+                        onPitchMinusOne = onPitchMinusOne,
+                        onPitchPlusOne = onPitchPlusOne,
+                        onOffsetMinus = { offsetMs = (offsetMs - 500L).coerceAtLeast(-10_000L) },
+                        onOffsetPlus = { offsetMs = (offsetMs + 500L).coerceAtMost(10_000L) },
+                    )
+                }
             }
         }
     }
