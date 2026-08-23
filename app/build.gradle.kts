@@ -2,10 +2,7 @@ plugins {
     alias(libs.plugins.android.application.compose.convention)
     alias(libs.plugins.android.application)
     alias(libs.plugins.android.hilt)
-    alias(libs.plugins.android.firebase)
     alias(libs.plugins.baselineprofile)
-    alias(libs.plugins.google.services)
-    alias(libs.plugins.firebase.crashlytics)
 }
 
 android {
@@ -38,15 +35,6 @@ android {
     lint {
         baseline = file("lint-baseline.xml")
     }
-    //    buildTypes {
-//        create("benchmark") {
-//            initWith(buildTypes.getByName("release"))
-//            signingConfig = signingConfigs.getByName("debug")
-//            matchingFallbacks += listOf("release")
-//            isDebuggable = false
-//        }
-//    }
-
 }
 composeCompiler {
     reportsDestination = layout.buildDirectory.dir("compose_compiler")
@@ -66,5 +54,4 @@ dependencies {
     implementation("androidx.compose.runtime:runtime-tracing:1.0.0-beta01")
     implementation(libs.coil)
     implementation(libs.coil.compose)
-
 }
