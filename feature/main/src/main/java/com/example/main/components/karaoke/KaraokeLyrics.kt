@@ -2,6 +2,7 @@ package com.example.main.components.karaoke
 
 import android.net.Uri
 import com.example.domain.model.playable.PlayableItem
+import com.example.domain.model.youtube.video_detail.SubtitleTrack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -18,8 +19,18 @@ internal data class KaraokeLyricLine(
 
 internal sealed interface KaraokeLyricsResult {
     data object Loading : KaraokeLyricsResult
-    data class Synced(val lines: List<KaraokeLyricLine>) : KaraokeLyricsResult
-    data class Plain(val text: String) : KaraokeLyricsResult
+
+    data class Synced(
+        val lines: List<KaraokeLyricLine>,
+        val sourceLabel: String = "LRCLIB",
+        val autoOffsetMs: Long = 0L,
+    ) : KaraokeLyricsResult
+
+    data class Plain(
+        val text: String,
+        val sourceLabel: String = "YouTube description",
+    ) : KaraokeLyricsResult
+
     data class Error(val message: String) : KaraokeLyricsResult
 }
 
@@ -39,11 +50,7 @@ internal object KaraokeLyricsRepository {
             val splitTitle = artistTitle?.second ?: rawTitle
             val coreTitle = stripAlternateTitle(splitTitle)
 
-            val durationSec = when {
-                item.duration <= 0L -> 0L
-                item.duration > 100_000L -> item.duration / 1000L
-                else -> item.duration
-            }
+            val videoDurationSec = durationSeconds(item.duration)
 
             val titleCandidates = linkedSetOf<String>().apply {
                 add(coreTitle)
@@ -60,7 +67,7 @@ internal object KaraokeLyricsRepository {
             val merged = LinkedHashMap<Long, JSONObject>()
 
             for ((index, url) in urls.withIndex()) {
-                val results = JSONArray(httpGet(url))
+                val results = JSONArray(httpGetText(url, "application/json"))
                 for (i in 0 until results.length()) {
                     val candidate = results.getJSONObject(i)
                     val id = candidate.optLong("id", Long.MIN_VALUE + merged.size)
@@ -72,54 +79,142 @@ internal object KaraokeLyricsRepository {
             }
 
             if (merged.isEmpty()) {
-                return@runCatching descriptionFallback?.let { KaraokeLyricsResult.Plain(it) }
-                    ?: KaraokeLyricsResult.Error(
-                        "ไม่พบเนื้อเพลงใน LRCLIB หรือคำอธิบาย YouTube\nค้นหา: $coreTitle"
-                    )
+                return@runCatching descriptionFallback?.let {
+                    KaraokeLyricsResult.Plain(it, "YouTube description")
+                } ?: KaraokeLyricsResult.Error(
+                    "ไม่พบเนื้อเพลงใน LRCLIB หรือคำอธิบาย YouTube\nค้นหา: $coreTitle"
+                )
             }
 
             val best = chooseBest(
                 results = merged.values.toList(),
                 wantedTitles = titleCandidates,
                 wantedArtists = artistCandidates,
-                durationSec = durationSec,
+                durationSec = videoDurationSec,
             )
 
             if (best == null) {
-                return@runCatching descriptionFallback?.let { KaraokeLyricsResult.Plain(it) }
-                    ?: KaraokeLyricsResult.Error(
-                        "LRCLIB พบผลค้นหา แต่ไม่ตรงกับเพลงนี้\nกำลังใช้แหล่ง YouTube แทน"
-                    )
+                return@runCatching descriptionFallback?.let {
+                    KaraokeLyricsResult.Plain(it, "YouTube description")
+                } ?: KaraokeLyricsResult.Error(
+                    "LRCLIB พบผลค้นหา แต่ไม่ตรงกับเพลงนี้\nกำลังใช้แหล่ง YouTube แทน"
+                )
             }
 
             val synced = best.optString("syncedLyrics")
                 .takeIf { it.isNotBlank() && it != "null" }
             val plain = best.optString("plainLyrics")
                 .takeIf { it.isNotBlank() && it != "null" }
+            val lrclibDurationSec = best.optDouble("duration", 0.0).toLong()
+            val autoOffsetMs = calculateMvIntroOffsetMs(
+                item = item,
+                videoDurationSec = videoDurationSec,
+                trackDurationSec = lrclibDurationSec,
+            )
 
             when {
                 synced != null -> {
                     val parsed = LrcParser.parse(synced)
                     when {
-                        parsed.isNotEmpty() -> KaraokeLyricsResult.Synced(parsed)
-                        plain != null -> KaraokeLyricsResult.Plain(plain)
-                        descriptionFallback != null -> KaraokeLyricsResult.Plain(descriptionFallback)
+                        parsed.isNotEmpty() -> KaraokeLyricsResult.Synced(
+                            lines = parsed,
+                            sourceLabel = "LRCLIB",
+                            autoOffsetMs = autoOffsetMs,
+                        )
+                        plain != null -> KaraokeLyricsResult.Plain(plain, "LRCLIB")
+                        descriptionFallback != null -> KaraokeLyricsResult.Plain(
+                            descriptionFallback,
+                            "YouTube description",
+                        )
                         else -> KaraokeLyricsResult.Error("เนื้อเพลงนี้ไม่มีเวลา sync")
                     }
                 }
-                plain != null -> KaraokeLyricsResult.Plain(plain)
-                descriptionFallback != null -> KaraokeLyricsResult.Plain(descriptionFallback)
+                plain != null -> KaraokeLyricsResult.Plain(plain, "LRCLIB")
+                descriptionFallback != null -> KaraokeLyricsResult.Plain(
+                    descriptionFallback,
+                    "YouTube description",
+                )
                 else -> KaraokeLyricsResult.Error("ไม่พบเนื้อเพลง")
             }
         }.getOrElse {
-            descriptionFallback?.let { KaraokeLyricsResult.Plain(it) }
-                ?: KaraokeLyricsResult.Error("โหลดเนื้อเพลงไม่สำเร็จ")
+            descriptionFallback?.let {
+                KaraokeLyricsResult.Plain(it, "YouTube description")
+            } ?: KaraokeLyricsResult.Error("โหลดเนื้อเพลงไม่สำเร็จ")
         }
+    }
+
+    suspend fun fromYouTubeSubtitles(
+        tracks: List<SubtitleTrack>,
+        videoTitle: String,
+    ): KaraokeLyricsResult.Synced? = withContext(Dispatchers.IO) {
+        if (tracks.isEmpty()) return@withContext null
+
+        val looksLikeMv = looksLikeMusicVideo(videoTitle)
+        val thaiTitle = Regex("[ก-๙]").containsMatchIn(videoTitle)
+        val orderedTracks = tracks
+            .filter { !it.autoGenerated || looksLikeMv }
+            .sortedWith(
+                compareBy<SubtitleTrack> { track ->
+                    val lang = track.languageTag.lowercase()
+                    when {
+                        thaiTitle && lang.startsWith("th") -> 0
+                        !thaiTitle && lang.startsWith("en") -> 0
+                        lang.startsWith("th") || lang.startsWith("en") -> 1
+                        else -> 2
+                    }
+                }.thenBy { if (it.autoGenerated) 1 else 0 }
+            )
+
+        for (track in orderedTracks.take(4)) {
+            val parsed = runCatching {
+                val webVtt = httpGetText(track.url, "text/vtt,text/plain,*/*")
+                WebVttParser.parse(webVtt)
+            }.getOrNull().orEmpty()
+
+            if (parsed.size >= 4) {
+                val autoLabel = if (track.autoGenerated) " auto" else ""
+                return@withContext KaraokeLyricsResult.Synced(
+                    lines = parsed,
+                    sourceLabel = "YouTube captions ${track.languageTag}$autoLabel",
+                    autoOffsetMs = 0L,
+                )
+            }
+        }
+
+        null
     }
 
     internal fun fromDescription(description: String): KaraokeLyricsResult? =
         extractLyricsFromRawDescription(description)
-            ?.let { KaraokeLyricsResult.Plain(it) }
+            ?.let { KaraokeLyricsResult.Plain(it, "YouTube description") }
+
+    internal fun looksLikeMusicVideo(title: String): Boolean =
+        Regex(
+            "(?i)(\\bmv\\b|music\\s*video|official\\s*(mv|video)|official\\s*music\\s*video)"
+        ).containsMatchIn(title)
+
+    private fun durationSeconds(duration: Long): Long = when {
+        duration <= 0L -> 0L
+        duration > 100_000L -> duration / 1000L
+        else -> duration
+    }
+
+    private fun calculateMvIntroOffsetMs(
+        item: PlayableItem,
+        videoDurationSec: Long,
+        trackDurationSec: Long,
+    ): Long {
+        if (item !is PlayableItem.Remote) return 0L
+        if (!looksLikeMusicVideo(item.title)) return 0L
+        if (videoDurationSec <= 0L || trackDurationSec <= 0L) return 0L
+
+        val extraSeconds = videoDurationSec - trackDurationSec
+        return if (extraSeconds in 2L..45L) {
+            extraSeconds * 1_000L
+        } else {
+            0L
+        }
+    }
 
     private fun buildSearchUrls(
         titles: List<String>,
@@ -165,18 +260,19 @@ internal object KaraokeLyricsRepository {
     private fun keywordSearch(query: String): String =
         "https://lrclib.net/api/search?q=${Uri.encode(query)}"
 
-    private fun httpGet(url: String): String {
+    private fun httpGetText(url: String, accept: String): String {
         var attempt = 0
         while (true) {
             val connection = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 8_000
                 readTimeout = 8_000
+                instanceFollowRedirects = true
                 setRequestProperty(
                     "User-Agent",
                     "Transpose-Karaoke/1.0 (https://github.com/poomkart/Transpose)"
                 )
-                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Accept", accept)
             }
 
             try {
@@ -191,7 +287,7 @@ internal object KaraokeLyricsRepository {
                     continue
                 }
                 if (responseCode !in 200..299) {
-                    error("LRCLIB HTTP $responseCode")
+                    error("HTTP $responseCode")
                 }
                 return connection.inputStream.bufferedReader().use { it.readText() }
             } finally {
@@ -418,8 +514,90 @@ internal object LrcParser {
                     3 -> fractionRaw.toLongOrNull() ?: 0L
                     else -> 0L
                 }
-                add(KaraokeLyricLine((minute * 60_000L) + (second * 1_000L) + fractionMs, text))
+                add(
+                    KaraokeLyricLine(
+                        (minute * 60_000L) + (second * 1_000L) + fractionMs,
+                        text,
+                    )
+                )
             }
         }
     }.sortedBy { it.timeMs }
+}
+
+internal object WebVttParser {
+    private val timestampLine = Regex(
+        "^(?:(\\d{1,2}):)?(\\d{1,2}):(\\d{2})[.,](\\d{1,3})(?:\\s+.*)?$"
+    )
+
+    fun parse(webVtt: String): List<KaraokeLyricLine> {
+        val sourceLines = webVtt
+            .replace("\\r\\n", "\\n")
+            .replace('\\r', '\\n')
+            .lines()
+
+        val result = mutableListOf<KaraokeLyricLine>()
+        var index = 0
+
+        while (index < sourceLines.size) {
+            val line = sourceLines[index].trim()
+            if (!line.contains("-->")) {
+                index += 1
+                continue
+            }
+
+            val startTime = parseTimestamp(line.substringBefore("-->").trim())
+            index += 1
+
+            val textParts = mutableListOf<String>()
+            while (index < sourceLines.size && sourceLines[index].isNotBlank()) {
+                textParts += sourceLines[index]
+                index += 1
+            }
+
+            if (startTime == null) continue
+            val text = cleanCueText(textParts.joinToString(" "))
+            if (text.isBlank()) continue
+
+            val previous = result.lastOrNull()
+            if (
+                previous == null ||
+                previous.text != text ||
+                abs(previous.timeMs - startTime) > 1_000L
+            ) {
+                result += KaraokeLyricLine(startTime, text)
+            }
+        }
+
+        return result.sortedBy { it.timeMs }
+    }
+
+    private fun parseTimestamp(raw: String): Long? {
+        val match = timestampLine.matchEntire(raw.trim()) ?: return null
+        val hours = match.groupValues[1].toLongOrNull() ?: 0L
+        val minutes = match.groupValues[2].toLongOrNull() ?: return null
+        val seconds = match.groupValues[3].toLongOrNull() ?: return null
+        val fractionRaw = match.groupValues[4]
+        val milliseconds = when (fractionRaw.length) {
+            1 -> fractionRaw.toLongOrNull()?.times(100L)
+            2 -> fractionRaw.toLongOrNull()?.times(10L)
+            else -> fractionRaw.padEnd(3, '0').take(3).toLongOrNull()
+        } ?: return null
+
+        return (hours * 3_600_000L) +
+            (minutes * 60_000L) +
+            (seconds * 1_000L) +
+            milliseconds
+    }
+
+    private fun cleanCueText(raw: String): String = raw
+        .replace(Regex("<[^>]+>"), "")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 }
