@@ -85,6 +85,13 @@ internal object KaraokeLyricsRepository {
                 durationSec = durationSec,
             )
 
+            if (best == null) {
+                return@runCatching descriptionFallback?.let { KaraokeLyricsResult.Plain(it) }
+                    ?: KaraokeLyricsResult.Error(
+                        "LRCLIB พบผลค้นหา แต่ไม่ตรงกับเพลงนี้\nกำลังใช้แหล่ง YouTube แทน"
+                    )
+            }
+
             val synced = best.optString("syncedLyrics")
                 .takeIf { it.isNotBlank() && it != "null" }
             val plain = best.optString("plainLyrics")
@@ -198,8 +205,17 @@ internal object KaraokeLyricsRepository {
         wantedTitles: List<String>,
         wantedArtists: List<String>,
         durationSec: Long,
-    ): JSONObject {
-        return results.minByOrNull { candidate ->
+    ): JSONObject? {
+        val confidentResults = results.filter { candidate ->
+            val candidateTitle = candidate.optString("trackName")
+                .ifBlank { candidate.optString("name") }
+            val candidateArtist = candidate.optString("artistName")
+
+            isConfidentTitleMatch(wantedTitles, candidateTitle) &&
+                isConfidentArtistMatch(wantedArtists, candidateArtist)
+        }
+
+        return confidentResults.minByOrNull { candidate ->
             val candidateTitle = candidate.optString("trackName")
                 .ifBlank { candidate.optString("name") }
             val candidateArtist = candidate.optString("artistName")
@@ -234,7 +250,37 @@ internal object KaraokeLyricsRepository {
             }
 
             (titlePenalty * 3) + artistPenalty + durationPenalty + lyricsPenalty
-        } ?: results.first()
+        }
+    }
+
+    private fun isConfidentTitleMatch(wantedTitles: List<String>, actualTitle: String): Boolean {
+        val actual = normalize(actualTitle)
+        if (actual.isBlank()) return false
+
+        return wantedTitles.any { wanted ->
+            val expected = normalize(wanted)
+            expected.isNotBlank() && (
+                expected == actual ||
+                    actual.contains(expected) ||
+                    expected.contains(actual)
+                )
+        }
+    }
+
+    private fun isConfidentArtistMatch(wantedArtists: List<String>, actualArtist: String): Boolean {
+        if (wantedArtists.isEmpty()) return true
+
+        val actual = normalize(actualArtist)
+        if (actual.isBlank()) return false
+
+        return wantedArtists.any { wanted ->
+            val expected = normalize(wanted)
+            expected.isNotBlank() && (
+                expected == actual ||
+                    actual.contains(expected) ||
+                    expected.contains(actual)
+                )
+        }
     }
 
     private fun extractLyricsFromDescription(item: PlayableItem): String? {
