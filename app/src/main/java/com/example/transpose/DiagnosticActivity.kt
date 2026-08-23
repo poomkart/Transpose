@@ -7,8 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
@@ -20,90 +18,108 @@ class DiagnosticActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val report = CrashDiagnostics.lastCrash(this)
-        if (report == null) {
-            setContentView(statusView())
-            Handler(Looper.getMainLooper()).postDelayed({
-                startActivity(Intent(this, MainActivity::class.java))
-                finish()
-            }, 350L)
-            return
-        }
-
-        setContentView(crashView(report))
+        CrashDiagnostics.markStage(this, "safe_boot_visible")
+        setContentView(buildScreen())
     }
 
-    private fun statusView(): TextView = TextView(this).apply {
-        setBackgroundColor(Color.rgb(8, 11, 18))
-        setTextColor(Color.WHITE)
-        textSize = 18f
-        gravity = Gravity.CENTER
-        text = "Transpose Karaoke\nStarting…"
-        setPadding(32, 32, 32, 32)
+    override fun onResume() {
+        super.onResume()
+        // If MainActivity crashes, Android returns here. Rebuild the screen so the
+        // last persisted stage / Java crash report is immediately visible.
+        setContentView(buildScreen())
     }
 
-    private fun crashView(report: String): ScrollView {
+    private fun buildScreen(): ScrollView {
         val density = resources.displayMetrics.density
         fun dp(value: Int): Int = (value * density).toInt()
 
+        val report = CrashDiagnostics.lastCrash(this)
+        val lastStage = CrashDiagnostics.lastStage(this) ?: "none yet"
+
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(24), dp(18), dp(24))
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(20), dp(32), dp(20), dp(32))
             setBackgroundColor(Color.rgb(8, 11, 18))
         }
 
-        val title = TextView(this).apply {
+        container.addView(TextView(this).apply {
             setTextColor(Color.WHITE)
-            textSize = 24f
-            text = "Karaoke Crash Diagnostic"
-        }
-        container.addView(title)
+            textSize = 27f
+            gravity = Gravity.CENTER
+            text = "🎤 Transpose Karaoke\nSafe Boot"
+        })
 
-        val hint = TextView(this).apply {
+        container.addView(TextView(this).apply {
+            setTextColor(Color.rgb(117, 230, 164))
+            textSize = 16f
+            gravity = Gravity.CENTER
+            text = "Safe launcher is running"
+            setPadding(0, dp(10), 0, dp(18))
+        })
+
+        container.addView(TextView(this).apply {
             setTextColor(Color.rgb(190, 198, 215))
-            textSize = 15f
-            text = "แอปจับสาเหตุที่เด้งได้แล้ว กด Copy Error แล้วส่งข้อความนี้ให้ ChatGPT"
-            setPadding(0, dp(8), 0, dp(14))
-        }
-        container.addView(hint)
-
-        val reportView = TextView(this).apply {
-            setTextColor(Color.rgb(225, 229, 238))
-            setBackgroundColor(Color.rgb(19, 25, 39))
-            textSize = 12f
-            typeface = android.graphics.Typeface.MONOSPACE
-            text = report
+            textSize = 14f
+            text = "Last stage before this screen:\n$lastStage"
             setTextIsSelectable(true)
             setPadding(dp(12), dp(12), dp(12), dp(12))
-        }
-        container.addView(
-            reportView,
-            LinearLayout.LayoutParams(
+            setBackgroundColor(Color.rgb(19, 25, 39))
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
+
+        if (report != null) {
+            container.addView(TextView(this).apply {
+                setTextColor(Color.rgb(255, 185, 185))
+                textSize = 13f
+                text = "Java/Kotlin crash captured:"
+                setPadding(0, dp(18), 0, dp(8))
+            })
+
+            container.addView(TextView(this).apply {
+                setTextColor(Color.rgb(225, 229, 238))
+                setBackgroundColor(Color.rgb(19, 25, 39))
+                textSize = 11f
+                typeface = android.graphics.Typeface.MONOSPACE
+                text = report
+                setTextIsSelectable(true)
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+            }, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
-        )
+            ))
 
-        val copyButton = Button(this).apply {
-            text = "Copy Error"
-            setOnClickListener {
-                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Transpose Karaoke crash", report))
-                text = "Copied ✓"
-            }
+            container.addView(Button(this).apply {
+                text = "Copy Crash Report"
+                setOnClickListener {
+                    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Transpose Karaoke crash", report))
+                    text = "Copied ✓"
+                }
+            })
         }
-        container.addView(copyButton)
 
-        val retryButton = Button(this).apply {
-            text = "Clear Error & Try Again"
+        container.addView(Button(this).apply {
+            text = "▶ Open Transpose Core"
             setOnClickListener {
                 CrashDiagnostics.clear(this@DiagnosticActivity)
+                CrashDiagnostics.markStage(this@DiagnosticActivity, "launching_main")
                 startActivity(Intent(this@DiagnosticActivity, MainActivity::class.java))
-                finish()
             }
-        }
-        container.addView(retryButton)
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(22) })
+
+        container.addView(TextView(this).apply {
+            setTextColor(Color.rgb(150, 158, 176))
+            textSize = 13f
+            gravity = Gravity.CENTER
+            text = "ถ้ากด Open Transpose Core แล้วเด้งกลับมาหน้านี้\nส่งรูปหน้าจอนี้มาให้ผม โดยเฉพาะ Last stage"
+            setPadding(0, dp(12), 0, 0)
+        })
 
         return ScrollView(this).apply {
             setBackgroundColor(Color.rgb(8, 11, 18))
