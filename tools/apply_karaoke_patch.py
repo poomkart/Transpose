@@ -5,8 +5,9 @@ import sys
 root = Path(sys.argv[1] if len(sys.argv) > 1 else '.').resolve()
 vm = root / 'feature/main/src/main/java/com/example/main/MainViewModel.kt'
 player = root / 'feature/main/src/main/java/com/example/main/components/bottomsheet/PlayerBottomSheet.kt'
+karaoke_lyrics = root / 'feature/main/src/main/java/com/example/main/components/karaoke/KaraokeLyrics.kt'
 
-for f in (vm, player):
+for f in (vm, player, karaoke_lyrics):
     if not f.exists():
         raise SystemExit(f'Missing expected file: {f}')
 
@@ -96,4 +97,112 @@ if 'onEnsureVocalRemovalEnabled = mainViewModel::ensureKaraokeVocalRemovalEnable
     s = s.replace(overlay_anchor, overlay, 1)
 
 player.write_text(s)
+
+# Karaoke title parsing fix for live sessions / TV shows / channel-branded uploads.
+s = karaoke_lyrics.read_text()
+if 'val titleIsProgramFormat' not in s:
+    old_identity = '''            val artistTitle = splitArtistAndTitle(rawTitle)
+            val inferredArtist = artistTitle?.first.orEmpty()
+            val splitTitle = artistTitle?.second ?: rawTitle
+            val coreTitle = stripAlternateTitle(splitTitle)
+'''
+    new_identity = '''            val artistTitle = splitArtistAndTitle(rawTitle)
+            val titleIsProgramFormat = artistTitle != null && artistTitle.first.isBlank()
+            val inferredArtist = artistTitle?.first.orEmpty()
+            val splitTitle = artistTitle?.second ?: rawTitle
+            val coreTitle = stripAlternateTitle(splitTitle)
+'''
+    if old_identity not in s:
+        raise SystemExit('Karaoke title identity anchor not found')
+    s = s.replace(old_identity, new_identity, 1)
+
+    old_candidates = '''            val titleCandidates = linkedSetOf<String>().apply {
+                add(coreTitle)
+                add(splitTitle)
+                add(rawTitle)
+            }.filter { it.isNotBlank() }
+
+            val artistCandidates = linkedSetOf<String>().apply {
+                add(inferredArtist)
+                add(uploaderArtist)
+            }.filter { it.isNotBlank() }
+'''
+    new_candidates = '''            val titleCandidates = linkedSetOf<String>().apply {
+                add(coreTitle)
+                add(splitTitle)
+                if (!titleIsProgramFormat) add(rawTitle)
+            }.filter { it.isNotBlank() }
+
+            val artistCandidates = linkedSetOf<String>().apply {
+                add(inferredArtist)
+                if (!titleIsProgramFormat) add(uploaderArtist)
+            }.filter { it.isNotBlank() }
+'''
+    if old_candidates not in s:
+        raise SystemExit('Karaoke title candidates anchor not found')
+    s = s.replace(old_candidates, new_candidates, 1)
+
+    old_split = '''    private fun splitArtistAndTitle(raw: String): Pair<String, String>? {
+        val separators = listOf(" - ", " – ", " — ", " | ")
+        separators.forEach { separator ->
+            val index = raw.indexOf(separator)
+            if (index > 0 && index < raw.length - separator.length) {
+                val left = cleanArtist(raw.substring(0, index))
+                val right = raw.substring(index + separator.length).trim()
+                if (left.isNotBlank() && right.isNotBlank()) return left to right
+            }
+        }
+        return null
+    }
+'''
+    new_split = '''    private fun splitArtistAndTitle(raw: String): Pair<String, String>? {
+        val separators = listOf(" - ", " – ", " — ", " | ")
+        separators.forEach { separator ->
+            val index = raw.indexOf(separator)
+            if (index > 0 && index < raw.length - separator.length) {
+                val leftRaw = raw.substring(0, index).trim()
+                val right = raw.substring(index + separator.length).trim()
+
+                // Uploads from TV shows / live-session channels commonly use:
+                // "Song title - Program | Program Live Session".
+                // In that format the left side is the TRACK, not the artist.
+                if (looksLikeProgramSuffix(right)) {
+                    val track = stripAlternateTitle(leftRaw)
+                    if (track.isNotBlank()) return "" to track
+                }
+
+                val leftArtist = cleanArtist(leftRaw)
+                if (leftArtist.isNotBlank() && right.isNotBlank()) return leftArtist to right
+            }
+        }
+        return null
+    }
+
+    private fun looksLikeProgramSuffix(value: String): Boolean =
+        Regex(
+            "(?i)(live\\s*session|live\\s*performance|acoustic\\s*session|studio\\s*session|" +
+                "\\bsession\\b|\\bepisode\\b|\\bep\\.?\\s*\\d*|\\bshow\\b|รายการ|4\\s*โพดำ)"
+        ).containsMatchIn(value)
+'''
+    if old_split not in s:
+        raise SystemExit('Karaoke splitArtistAndTitle anchor not found')
+    s = s.replace(old_split, new_split, 1)
+
+    old_music_video = '''    internal fun looksLikeMusicVideo(title: String): Boolean =
+        Regex(
+            "(?i)(\\bmv\\b|music\\s*video|official\\s*(mv|video)|official\\s*music\\s*video)"
+        ).containsMatchIn(title)
+'''
+    new_music_video = '''    internal fun looksLikeMusicVideo(title: String): Boolean =
+        Regex(
+            "(?i)(\\bmv\\b|music\\s*video|official\\s*(mv|video)|official\\s*music\\s*video|" +
+                "live\\s*session|live\\s*performance|acoustic\\s*session|studio\\s*session)"
+        ).containsMatchIn(title)
+'''
+    if old_music_video not in s:
+        raise SystemExit('Karaoke music-video anchor not found')
+    s = s.replace(old_music_video, new_music_video, 1)
+
+    karaoke_lyrics.write_text(s)
+
 print('Karaoke Mode patch applied successfully')
