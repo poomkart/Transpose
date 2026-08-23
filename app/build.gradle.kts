@@ -18,6 +18,11 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".karaoke"
+            versionNameSuffix = "-karaoke"
+            resValue("string", "app_name", "Transpose Karaoke")
+        }
         getByName("release") {
             signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
