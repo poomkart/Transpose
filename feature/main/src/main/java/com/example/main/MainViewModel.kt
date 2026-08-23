@@ -690,6 +690,15 @@ class MainViewModel @Inject constructor(
     val pitchValue = audioEffectsManager.pitchValue
     val tempoValue = audioEffectsManager.tempoValue
 
+    val isVocalRemovalEnabled = audioEffectsManager.isVocalRemovalEnabled
+    val isVocalRemovalSupported = audioEffectsManager.isVocalRemovalSupported
+
+    fun ensureKaraokeVocalRemovalEnabled() {
+        if (isVocalRemovalSupported.value && !isVocalRemovalEnabled.value) {
+            audioEffectsManager.updateIsVocalRemovalEnabled()
+        }
+    }
+
     fun pitchPlusOne() {
         audioEffectsManager.pitchPlusOne()
     }

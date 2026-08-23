@@ -79,6 +79,7 @@ import com.example.main.components.bottomsheet.item.PlayerThumbnailView
 import com.example.main.components.bottomsheet.item.PlaylistFloatingButton
 import com.example.main.components.bottomsheet.item.VideoDetailPanel
 import com.example.main.components.bottomsheet.state.VideoDetailUiState
+import com.example.main.components.karaoke.KaraokeOverlay
 import com.example.util.constants.AppColors
 import com.example.util.ToastUtil
 import kotlinx.coroutines.delay
@@ -121,6 +122,8 @@ fun PlayerBottomSheet(
     val videoDetailUiState by mainViewModel.videoDetailUiState.collectAsStateWithLifecycle()
     val pitchValue by mainViewModel.pitchValue.collectAsStateWithLifecycle()
     val tempoValue by mainViewModel.tempoValue.collectAsStateWithLifecycle()
+    val isVocalRemovalEnabled by mainViewModel.isVocalRemovalEnabled.collectAsStateWithLifecycle()
+    val isVocalRemovalSupported by mainViewModel.isVocalRemovalSupported.collectAsStateWithLifecycle()
     val myPlaylists by mainViewModel.myPlaylists.collectAsStateWithLifecycle()
     val currentPlaylist by mainViewModel.currentPlaylist.collectAsStateWithLifecycle()
     val currentPlaylistIndex by mainViewModel.currentPlaylistIndex.collectAsStateWithLifecycle()
@@ -130,6 +133,7 @@ fun PlayerBottomSheet(
     val coroutineScope = rememberCoroutineScope()
     var showPlaylistModal by remember { mutableStateOf(false) }
     var showQualityModal by remember { mutableStateOf(false) }
+    var showKaraokeMode by remember { mutableStateOf(false) }
     val playerHeight = LocalConfiguration.current.screenWidthDp.dp / GraphicsLayerConstants.PLAYER_ASPECT_RATIO
     val playerHeightPx = with(LocalDensity.current) { playerHeight.roundToPx() }
     val onVideoDetailTouchActiveChangedState by rememberUpdatedState(onVideoDetailTouchActiveChanged)
@@ -282,9 +286,7 @@ fun PlayerBottomSheet(
                                 }
                             },
                             onQualityClick = { showQualityModal = true },
-                            onFullscreenClick = {
-                                ToastUtil.showShort(context, R.string.fullscreen_mode_coming_soon)
-                            },
+                            onFullscreenClick = { showKaraokeMode = true },
                             onPlayPause = mainViewModel::playPause,
                             onSeekBy = mainViewModel::seekBy,
                             onPrevious = mainViewModel::seekToPreviousItem,
@@ -375,6 +377,23 @@ fun PlayerBottomSheet(
                     alpha = if (progress < 0) 1f else progress.pow(3).coerceAtLeast(0f)
                 }
         )
+        if (showKaraokeMode && currentItem != null) {
+            KaraokeOverlay(
+                item = currentItem!!,
+                isPlaying = isPlaying,
+                pitchUiValue = pitchValue,
+                isVocalRemovalSupported = isVocalRemovalSupported,
+                isVocalRemovalEnabled = isVocalRemovalEnabled,
+                mediaPositionProvider = { mediaController?.currentPosition ?: 0L },
+                onClose = { showKaraokeMode = false },
+                onPlayPause = mainViewModel::playPause,
+                onPitchMinusOne = mainViewModel::pitchMinusOne,
+                onPitchPlusOne = mainViewModel::pitchPlusOne,
+                onEnsureVocalRemovalEnabled = mainViewModel::ensureKaraokeVocalRemovalEnabled,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
         PlaylistFloatingButton(
             currentPlaylist = currentPlaylist,
             playlistTitle = currentPlaylistInfo?.title,
@@ -645,8 +664,8 @@ private fun PlayerChromeControls(
             )
             Spacer(modifier = Modifier.weight(1f))
             ChromeIconButton(
-                iconRes = R.drawable.baseline_fullscreen_24,
-                contentDescription = "Fullscreen",
+                iconRes = R.drawable.baseline_mic_24,
+                contentDescription = "Karaoke",
                 onClick = onFullscreenClick,
                 modifier = Modifier.size(30.dp)
             )
