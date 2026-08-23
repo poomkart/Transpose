@@ -110,6 +110,10 @@ internal object KaraokeLyricsRepository {
         }
     }
 
+    internal fun fromDescription(description: String): KaraokeLyricsResult? =
+        extractLyricsFromRawDescription(description)
+            ?.let { KaraokeLyricsResult.Plain(it) }
+
     private fun buildSearchUrls(
         titles: List<String>,
         artists: List<String>,
@@ -238,7 +242,10 @@ internal object KaraokeLyricsRepository {
             ?.video
             ?.description
             .orEmpty()
+        return extractLyricsFromRawDescription(description)
+    }
 
+    private fun extractLyricsFromRawDescription(description: String): String? {
         if (description.isBlank()) return null
 
         val lines = description.lines()

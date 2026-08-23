@@ -126,7 +126,22 @@ internal fun KaraokeOverlay(
             setVocalOnly(false)
             audioEffectsManager.updateVocalRemovalMix(1f)
         }
-        lyrics = KaraokeLyricsRepository.get(item)
+
+        val primaryLyrics = KaraokeLyricsRepository.get(item)
+        lyrics = if (primaryLyrics is KaraokeLyricsResult.Error && item is PlayableItem.Remote) {
+            val fullDescription = try {
+                karaokeVideoRepository(context)
+                    .fetchVideoDetail(item.video)
+                    .getOrNull()
+                    ?.description
+            } catch (_: Exception) {
+                null
+            }
+
+            KaraokeLyricsRepository.fromDescription(fullDescription.orEmpty()) ?: primaryLyrics
+        } else {
+            primaryLyrics
+        }
     }
 
     LaunchedEffect(Unit) {
