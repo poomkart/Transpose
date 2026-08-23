@@ -23,9 +23,9 @@
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
-        android:icon="@mipmap/transpose_app_icon"
+        android:icon="@drawable/karaoke_app_icon"
         android:label="@string/app_name"
-        android:roundIcon="@mipmap/transpose_app_icon"
+        android:roundIcon="@drawable/karaoke_app_icon"
         android:supportsRtl="true"
         android:theme="@style/Theme.Transpose"
         tools:targetApi="31">
@@ -43,19 +43,24 @@
         </service>
 
         <activity
-            android:name=".MainActivity"
+            android:name=".DiagnosticActivity"
             android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.Transpose">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
             android:label="@string/app_name"
             android:launchMode="singleTask"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.Transpose"
-            android:windowSoftInputMode="adjustResize">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:windowSoftInputMode="adjustResize" />
 
         <meta-data
             android:name="com.google.android.exoplayer.core.util.DEBUG_MEDIA_CODEC_TIMING"
